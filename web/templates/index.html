@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>SI Structural Entropy Visualizer</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.26.0/cytoscape.min.js"></script>
+    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        #cy { width: 100%; height: 400px; border: 1px solid #ccc; background: #f9f9f9; }
+        .calc-box { background: #eee; padding: 15px; border-radius: 5px; margin-top: 10px; font-family: monospace; }
+        .formula-box { font-size: 1.2em; color: #0056b3; margin: 20px 0; }
+    </style>
+</head>
+<body class="container py-4">
+    <h1 class="mb-4">Structural Information (SI) Visualizer</h1>
+    
+    <div class="row">
+        <div class="col-md-7">
+            <h3>Graph & Partitioning</h3>
+            <p class="text-muted">Click nodes to assign them to Community A (Blue) or Community B (Red).</p>
+            <div id="cy"></div>
+            <div class="mt-3">
+                <button class="btn btn-primary" onclick="resetPartition()">Reset Partition</button>
+                <button class="btn btn-success" onclick="calculateEntropy()">Calculate Entropy</button>
+            </div>
+        </div>
+        
+        <div class="col-md-5">
+            <h3>Formula</h3>
+            <div class="formula-box">
+                \[ H(G, \mathcal{P}) = \sum_{C \in \mathcal{P}} - \frac{g_C}{VOL} \log_2 \frac{V_C}{VOL} \]
+            </div>
+
+            <div id="results" style="display:none;">
+                <h4>Calculation details:</h4>
+                <div id="log" class="calc-box"></div>
+                <div class="mt-3 alert alert-info">
+                    <strong>Total Structural Entropy: </strong> <span id="entropy-val">0</span> bits
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let cy;
+        let partition = {}; // node_id -> comm_id
+
+        async function init() {
+            const resp = await axios.get('/api/graph');
+            cy = cytoscape({
+                container: document.getElementById('cy'),
+                elements: resp.data,
+                style: [
+                    { selector: 'node', style: { 'label': 'data(id)', 'background-color': '#666', 'color': '#fff', 'text-valign': 'center' }},
+                    { selector: 'edge', style: { 'width': 2, 'line-color': '#ccc', 'label': 'data(weight)', 'font-size': '10px' }},
+                    { selector: '.comm-A', style: { 'background-color': '#007bff' }},
+                    { selector: '.comm-B', style: { 'background-color': '#dc3545' }}
+                ],
+                layout: { name: 'grid', rows: 2 }
+            });
+
+            cy.on('tap', 'node', function(evt){
+                const node = evt.target;
+                const id = node.id();
+                if (partition[id] === 'A') {
+                    partition[id] = 'B';
+                    node.style('background-color', '#dc3545');
+                } else {
+                    partition[id] = 'A';
+                    node.style('background-color', '#007bff');
+                }
+            });
+
+            // Init all to A
+            cy.nodes().forEach(n => partition[n.id()] = 'A');
+        }
+
+        function resetPartition() {
+            cy.nodes().forEach(n => {
+                partition[n.id()] = 'A';
+                n.style('background-color', '#007bff');
+            });
+            document.getElementById('results').style.display = 'none';
+        }
+
+        async function calculateEntropy() {
+            const resp = await axios.post('/api/calculate', { partition });
+            const data = resp.data;
+            
+            document.getElementById('results').style.display = 'block';
+            document.getElementById('entropy-val').innerText = data.total_entropy.toFixed(4);
+            
+            const log = document.getElementById('log');
+            log.innerHTML = data.steps.map(s => `
+                <div>${s.msg}</div>
+                ${s.v_c ? `<div class='ps-3 text-secondary'>V_C=${s.v_c}, g_C=${s.g_c}</div>` : ''}
+                ${s.entropy_contribution ? `<div class='ps-3 text-success'>Contribution: ${s.entropy_contribution}</div>` : ''}
+                <hr>
+            `).join('');
+        }
+
+        init();
+    </script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.env
+.venv
+env/
+venv/
+build/
+dist/
+
+# Benchmark Results
+benchmarks/*.csv
+benchmarks/*.png
+benchmarks/__pycache__/
+core/__pycache__/
+
+# IDE
+.vscode/
+.idea/
+
+# Flask
+instance/
+.webassets-cache
