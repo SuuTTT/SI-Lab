@@ -53,8 +53,8 @@ def calculate_structural_entropy(G, partition_dict):
     return se
 
 def benchmark_clustering():
-    # Reduced scales because Greedy is O(N^2)
-    scales = [100, 300, 500] 
+    # Adjusted scales to run faster while verifying accuracy
+    scales = [100, 200, 300] 
     all_results = []
     viz_data = {} # To store partition for N=100 for visualization
     
