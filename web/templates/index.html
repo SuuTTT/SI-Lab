@@ -1,107 +1,604 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>SI Structural Entropy Visualizer</title>
+    <title>SI-Lab Trace: Move & Merge</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.26.0/cytoscape.min.js"></script>
-    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
-    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <script>
+        window.MathJax = {
+            tex: {
+                inlineMath: [['$', '$'], ['\\(', '\\)']],
+                displayMath: [['$$', '$$'], ['\\[', '\\]']]
+            },
+            options: {
+                skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre']
+            }
+        };
+    </script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <style>
-        #cy { width: 100%; height: 400px; border: 1px solid #ccc; background: #f9f9f9; }
-        .calc-box { background: #eee; padding: 15px; border-radius: 5px; margin-top: 10px; font-family: monospace; }
-        .formula-box { font-size: 1.2em; color: #0056b3; margin: 20px 0; }
+        body { height: 100vh; display: flex; flex-direction: column; overflow: hidden; background: #f8f9fa; }
+        #app-header { background: #1a202c; color: white; padding: 10px 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        #main { flex: 1; display: flex; overflow: hidden; }
+        #sidebar { width: 480px; background: white; border-right: 1px solid #dee2e6; padding: 20px; display: flex; flex-direction: column; overflow: hidden; }
+        #sidebar-scroll { flex: 1; overflow-y: auto; padding-right: 5px; }
+        #canvas { flex: 1; position: relative; }
+        #cy { width: 100%; height: 100%; }
+        #cy-tree { width: 100%; height: 300px; border: 1px solid #ddd; background: #fff; margin-bottom: 15px; }
+        .phase-box { border: 1px solid #ddd; border-radius: 8px; padding: 12px; margin-bottom: 15px; }
+        .inspector-panel { background: #e7f5ff; border: 1px solid #74c0fc; border-radius: 8px; padding: 12px; margin-top: 15px; }
+        .trace-card { border-left: 5px solid #228be6; background: #f1f3f5; padding: 8px; margin-bottom: 8px; font-size: 0.8rem; }
+        .tree-inspector { background: #fff4e6; border: 1px solid #fd7e14; border-radius: 8px; padding: 12px; margin-top: 10px; font-size: 0.85rem; }
+        .log-entry { font-family: monospace; font-size: 0.75rem; color: #495057; border-bottom: 1px solid #eee; padding: 2px 0; }
+        .log-entry.move { color: #228be6; }
+        .log-entry.merge { color: #fd7e14; font-weight: bold; }
     </style>
 </head>
-<body class="container py-4">
-    <h1 class="mb-4">Structural Information (SI) Visualizer</h1>
-    
-    <div class="row">
-        <div class="col-md-7">
-            <h3>Graph & Partitioning</h3>
-            <p class="text-muted">Click nodes to assign them to Community A (Blue) or Community B (Red).</p>
-            <div id="cy"></div>
-            <div class="mt-3">
-                <button class="btn btn-primary" onclick="resetPartition()">Reset Partition</button>
-                <button class="btn btn-success" onclick="calculateEntropy()">Calculate Entropy</button>
+<body>
+    <div id="app-header" class="d-flex justify-content-between align-items-center">
+        <div class="d-flex align-items-center gap-3">
+            <h5 class="mb-0">SI-Lab: Hierarchical Louvain Visualizer</h5>
+            <div class="dropdown">
+                <button class="btn btn-sm btn-outline-warning dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                    Knowledge Base
+                </button>
+                <ul class="dropdown-menu shadow">
+                    <li><h6 class="dropdown-header">Available Documentation</h6></li>
+                    <li><a class="dropdown-item" href="#" onclick="openWiki('structural_entropy')">SI Theory & Invariants</a></li>
+                    <li><hr class="dropdown-divider"></li>
+                    <li><h6 class="dropdown-header">Future Topics</h6></li>
+                    <li><a class="dropdown-item disabled" href="#">High-Dim Louvain (Draft)</a></li>
+                    <li><a class="dropdown-item disabled" href="#">Benchmark Methodology</a></li>
+                </ul>
             </div>
         </div>
-        
-        <div class="col-md-5">
-            <h3>Formula</h3>
-            <div class="formula-box">
-                \[ H(G, \mathcal{P}) = \sum_{C \in \mathcal{P}} - \frac{g_C}{VOL} \log_2 \frac{V_C}{VOL} \]
+        <div class="d-flex gap-2">
+            <select id="preset-select" class="form-select form-select-sm" style="width: 250px;" onchange="loadPreset()">
+                <optgroup label="Classical Clustering">
+                    <option value="bridge">Bridge (High-Weight Clust)</option>
+                    <option value="ring_cliques">Ring of Cliques (4x4)</option>
+                    <option value="karate">Zachary's Karate Club</option>
+                </optgroup>
+                <optgroup label="Regular (Integer H)">
+                    <option value="complete_4">K4 (H = 2.0)</option>
+                    <option value="cube">3D Cube / Q3 (H = 3.0)</option>
+                    <option value="grid">4x4 Grid (H ~ 3.58)</option>
+                </optgroup>
+                <optgroup label="Special H (Rational)">
+                    <option value="star_5">Star S5 (H = 2.0)</option>
+                    <option value="star_3">Star S3 (H = 1.5)</option>
+                </optgroup>
+            </select>
+            <button class="btn btn-outline-light btn-sm" onclick="location.reload()">Reset</button>
+        </div>
+    </div>
+
+    <div id="main">
+        <div id="sidebar">
+            <ul class="nav nav-tabs nav-fill mb-2" id="labTabs" role="tablist">
+                <li class="nav-item">
+                    <button class="nav-link active py-1 small fw-bold" id="dashboard-tab" data-bs-toggle="tab" data-bs-target="#tab-dashboard" type="button">Dashboard</button>
+                </li>
+                <li class="nav-item">
+                    <button class="nav-link py-1 small fw-bold" id="details-tab" data-bs-toggle="tab" data-bs-target="#tab-details" type="button">Calculation</button>
+                </li>
+                <li class="nav-item">
+                    <button class="nav-link py-1 small fw-bold" id="theory-tab" data-bs-toggle="tab" data-bs-target="#tab-theory" type="button">Formula</button>
+                </li>
+            </ul>
+
+            <div id="sidebar-scroll" class="tab-content">
+                <!-- DASHBOARD TAB -->
+                <div class="tab-pane fade show active" id="tab-dashboard" role="tabpanel">
+                    <div class="d-flex align-items-center gap-2 mb-3">
+                        <div id="level-badge" class="badge bg-dark p-2 flex-grow-1">Level: 0 (Nodes)</div>
+                        <div class="dropdown">
+                            <button class="btn btn-outline-dark btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown">History</button>
+                            <ul id="level-history" class="dropdown-menu dropdown-menu-end small">
+                                <!-- Levels will be injected here -->
+                            </ul>
+                        </div>
+                    </div>
+                    
+                    <div class="phase-box" style="background: #fdf2f2;">
+                        <h6 class="fw-bold small">Phase 1: Local Move</h6>
+                        <div class="d-flex gap-2">
+                            <button class="btn btn-primary btn-sm flex-fill" onclick="suggestMove()">Next Move</button>
+                            <button id="auto-btn" class="btn btn-danger btn-sm flex-fill" onclick="toggleAutoRun()">Auto Louvain</button>
+                        </div>
+                    </div>
+
+                    <div class="phase-box" style="background: #fff9db;">
+                        <h6 class="fw-bold small">Phase 2: Aggregation</h6>
+                        <button class="btn btn-warning btn-sm w-100" onclick="mergeLevel()">Collapse Hierarchies</button>
+                    </div>
+
+                    <div id="metrics-view" class="alert alert-info py-2 small"></div>
+
+                    <div id="inspector-panel" class="inspector-panel" style="display:none;">
+                        <h6 class="fw-bold fs-6">Attribute Inspector</h6>
+                        <div id="inspector-content"></div>
+                        <button class="btn btn-primary btn-sm mt-2 w-100" onclick="saveChanges()">Apply Modification</button>
+                    </div>
+                </div>
+
+                <!-- CALCULATION DETAILS TAB -->
+                <div class="tab-pane fade" id="tab-details" role="tabpanel">
+                    <h6 class="border-bottom pb-1 small fw-bold">Active Encoding Tree (T)</h6>
+                    <div id="cy-tree"></div>
+                    <div id="tree-inspector" class="tree-inspector" style="display:none;">
+                        <h6 class="fw-bold border-bottom pb-1">Tree Node Detail</h6>
+                        <div id="tree-inspector-content"></div>
+                    </div>
+                    <h6 class="mt-3 border-bottom pb-1 small fw-bold">Flat Community List</h6>
+                    <div id="trace-container"></div>
+                </div>
+
+                <!-- THEORY TAB -->
+                <div class="tab-pane fade" id="tab-theory" role="tabpanel">
+                    <h6 class="border-bottom pb-1 small fw-bold">Mathematical Definition</h6>
+                    <div class="small p-2 bg-light border rounded">
+                        <p><b>1D Structural Entropy:</b></p>
+                        <div class="math-box p-2 bg-white border mb-2">
+                            \[H^{(1)}(G) = - \sum_{i \in V} \frac{d_i}{V} \log_2 \frac{d_i}{V}\]
+                        </div>
+                        <p><b>2D Structural Entropy:</b></p>
+                        <div class="math-box p-2 bg-white border mb-2">
+                            \[H^{(2)}(G, \mathcal{P}) = - \sum_{C \in \mathcal{P}} \left( \frac{g_C}{V} \log_2 \frac{V_C}{V} + \sum_{i \in C} \frac{d_i}{V} \log_2 \frac{d_i}{V_C} \right)\]
+                        </div>
+                        <p><b>Modularity (Q):</b></p>
+                        <div class="math-box p-2 bg-white border mb-2">
+                            \[Q = \sum_{C \in \mathcal{P}} \left[ \frac{e_C}{m} - \left(\frac{V_C}{2m}\right)^2 \right]\]
+                        </div>
+                        <p><b>General Encoding Tree (Height $L$):</b></p>
+                        <div class="math-box p-2 bg-white border mb-2">
+                            \[H(G; T) = - \sum_{\alpha \in T, \alpha \neq \lambda} \frac{g_\alpha}{V_G} \log_2 \frac{V_\alpha}{V_{parent(\alpha)}}\]
+                        </div>
+                        <p class="text-muted" style="font-size: 0.7rem;">Where \(V_G\) is total volume, \(V_\alpha\) is node volume, \(g_\alpha\) is cut size, and \(\alpha \in T\) are all nodes except the root \(\lambda\).</p>
+                    </div>
+                </div>
             </div>
 
-            <div id="results" style="display:none;">
-                <h4>Calculation details:</h4>
-                <div id="log" class="calc-box"></div>
-                <div class="mt-3 alert alert-info">
-                    <strong>Total Structural Entropy: </strong> <span id="entropy-val">0</span> bits
+            <div id="log-panel" class="mt-3 border-top pt-2" style="height: 150px; display: flex; flex-direction: column;">
+                <h6 class="small fw-bold mb-1">Process Log</h6>
+                <div id="log-container" style="flex:1; overflow-y: auto; background: #f8f9fa; border: 1px solid #eee; padding: 5px;"></div>
+            </div>
+        </div>
+        <div id="canvas">
+            <div id="cy"></div>
+        </div>
+    </div>
+
+    <!-- WIKI MODAL -->
+    <div class="modal fade" id="wikiModal" tabindex="-1">
+        <div class="modal-dialog modal-lg modal-dialog-scrollable">
+            <div class="modal-content shadow-lg border-0">
+                <div class="modal-header bg-dark text-white border-bottom-0">
+                    <h5 class="modal-title" id="wikiModalLabel">SI-Lab Wiki</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-4" id="wiki-modal-body" style="font-family: 'Segoe UI', system-ui, sans-serif;">
+                    <div class="text-center p-5">
+                        <div class="spinner-border text-primary" role="status"></div>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
 
     <script>
-        let cy;
-        let partition = {}; // node_id -> comm_id
+        let cy, cyTree;
+        let labData = {};
+        let selectedElement = null;
+        let autoRunning = false;
+        const colors = ['#339af0', '#ff6b6b', '#fcc419', '#51cf66', '#845ef7', '#ff922b', '#20c997', '#adb5bd', '#343a40'];
 
-        async function init() {
-            const resp = await axios.get('/api/graph');
-            cy = cytoscape({
-                container: document.getElementById('cy'),
-                elements: resp.data,
-                style: [
-                    { selector: 'node', style: { 'label': 'data(id)', 'background-color': '#666', 'color': '#fff', 'text-valign': 'center' }},
-                    { selector: 'edge', style: { 'width': 2, 'line-color': '#ccc', 'label': 'data(weight)', 'font-size': '10px' }},
-                    { selector: '.comm-A', style: { 'background-color': '#007bff' }},
-                    { selector: '.comm-B', style: { 'background-color': '#dc3545' }}
-                ],
-                layout: { name: 'grid', rows: 2 }
-            });
+        function addLog(msg, type='move') {
+            const container = document.getElementById('log-container');
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            const time = new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            entry.innerText = `[${time}] ${msg}`;
+            container.prepend(entry);
+        }
 
-            cy.on('tap', 'node', function(evt){
-                const node = evt.target;
-                const id = node.id();
-                if (partition[id] === 'A') {
-                    partition[id] = 'B';
-                    node.style('background-color', '#dc3545');
+        async function refresh(initCy = false) {
+            try {
+                const resp = await axios.get('/api/state');
+                labData = resp.data;
+
+                document.getElementById('level-badge').innerText = labData.label;
+                
+                // Update History Dropdown
+                const historyList = document.getElementById('level-history');
+                historyList.innerHTML = "";
+                labData.history.forEach((h, idx) => {
+                    const li = document.createElement('li');
+                    li.innerHTML = `<a class="dropdown-item ${idx === labData.current_idx ? 'active' : ''}" href="#" onclick="switchLevel(${idx})">${h}</a>`;
+                    historyList.appendChild(li);
+                });
+
+                const reduction = ((labData.metrics.se_1d_base || 0) - (labData.metrics.h_tree || 0)).toFixed(4);
+                const sipOptimal = labData.metrics.sip_optimal;
+                const isOptimal = (sipOptimal && Math.abs(labData.metrics.h_tree - sipOptimal) < 1e-4);
+
+                document.getElementById('metrics-view').innerHTML = `
+                    <div class="d-flex justify-content-between mb-1">
+                        <span>Hierarchical SI $H(G;T)$:</span> 
+                        <span class="fs-5 fw-bold text-primary">${labData.metrics.h_tree}</span>
+                    </div>
+                    <div class="d-flex justify-content-between text-success small"><span>SI Reduction:</span> <b>${reduction}</b></div>
+                    <hr class="my-1">
+                    <div class="d-flex justify-content-between small text-muted"><span>$H^{(1)}(G_0)$ Baseline:</span> <b>${labData.metrics.se_1d_base}</b></div>
+                    <div class="d-flex justify-content-between small text-muted"><span>Current Q:</span> <b>${labData.metrics.q || 0}</b></div>
+                    <hr class="my-1">
+                    <div class="p-2 mt-2 rounded ${isOptimal ? 'bg-success-subtle border-success' : 'bg-warning-subtle border-warning'} border">
+                        <div class="small fw-bold">SIP.py Validation Reference:</div>
+                        <div class="d-flex justify-content-between align-items-center">
+                            <span class="small">SIP Optimal $H$:</span>
+                            <span class="badge ${isOptimal ? 'bg-success' : 'bg-secondary'}">${sipOptimal || 'N/A'}</span>
+                        </div>
+                    </div>
+                `;
+
+                if (initCy || !cy) {
+                    if (cy) cy.destroy();
+                    cy = cytoscape({
+                        container: document.getElementById('cy'),
+                        elements: labData.elements,
+                        style: [
+                            { selector: 'node', style: { 'label': 'data(id)', 'color': '#fff', 'text-valign': 'center', 'width': 35, 'height': 35, 'font-size': '10px' }},
+                            { selector: 'edge', style: { 
+                                'width': 'mapData(weight, 0, 50, 1, 10)', 
+                                'line-color': '#adb5bd', 
+                                'curve-style': 'bezier', 
+                                'label': 'data(weight)', 
+                                'font-size': '8px', 
+                                'color': '#495057' 
+                            }},
+                            { selector: ':selected', style: { 'border-width': 4, 'border-color': '#228be6' }}
+                        ],
+                        layout: { name: 'cose', padding: 50, animate: true }
+                    });
+
+                    cy.on('tap', (e) => {
+                        if (e.target && e.target.isNode && e.target.isNode()) {
+                            selectedElement = e.target;
+                            openInspector(e.target);
+                        } else if (e.target && e.target.isEdge && e.target.isEdge()) {
+                            selectedElement = e.target;
+                            openInspector(e.target);
+                        } else {
+                            document.getElementById('inspector-panel').style.display = 'none';
+                            selectedElement = null;
+                        }
+                    });
                 } else {
-                    partition[id] = 'A';
-                    node.style('background-color', '#007bff');
+                    // Differential update: check if nodes changed
+                    const cyNodeIds = cy.nodes().map(n => n.id()).sort().join(',');
+                    const dataNodes = labData.elements.filter(e => !e.data.source).map(e => e.data.id).sort().join(',');
+
+                    if (cyNodeIds !== dataNodes) {
+                        cy.elements().remove();
+                        cy.add(labData.elements);
+                        cy.layout({ name: 'cose', animate: true, padding: 50 }).run();
+                    } else {
+                        // Update existing elements data
+                        labData.elements.forEach(el => {
+                            const existing = cy.getElementById(el.data.id);
+                            if (existing.length) {
+                                existing.data(el.data);
+                            } else {
+                                cy.add(el);
+                            }
+                        });
+                    }
+                }
+
+                // Always color nodes by partition
+                cy.nodes().forEach(n => {
+                    const cIdx = labData.partition[n.id()];
+                    n.style('background-color', colors[cIdx % colors.length]);
+                });
+
+                let traceHtml = "";
+                labData.metrics.traces.forEach(t => {
+                    const color = colors[t.cid % colors.length];
+                    traceHtml += `
+                        <div class="trace-card" style="border-left-color: ${color}">
+                            <div class="d-flex justify-content-between fw-bold mb-1">
+                                <span class="badge" style="background:${color}">Comm ${t.cid}</span>
+                                <span>${t.si} bits</span>
+                            </div>
+                            <div class="small text-muted">Nodes: [${t.nodes.join(', ')}]</div>
+                            <div class="d-flex justify-content-between mt-1" style="font-size: 0.7rem;">
+                                <span>Vol(C): ${t.v_c}</span>
+                                <span>Cut(C): ${t.g_c}</span>
+                                <span>Q_c: ${t.q}</span>
+                            </div>
+                        </div>
+                    `;
+                });
+                document.getElementById('trace-container').innerHTML = traceHtml;
+
+                renderCalculationTree();
+            } catch (err) {
+                console.error("Refresh Error:", err);
+                addLog(`Error: ${err.message}`, "merge");
+            }
+        }
+
+        function renderCalculationTree() {
+            if (!labData.tree) return;
+
+            const elements = [];
+            labData.tree.forEach(n => {
+                elements.push({ data: { id: n.id, label: n.label, ...n }});
+                if (n.parent) {
+                    // Tree structure: edges go from Parent to Child for layout
+                    elements.push({ data: { 
+                        id: `te_${n.parent}_${n.id}`,
+                        source: n.parent, 
+                        target: n.id 
+                    }});
                 }
             });
 
-            // Init all to A
-            cy.nodes().forEach(n => partition[n.id()] = 'A');
-        }
-
-        function resetPartition() {
-            cy.nodes().forEach(n => {
-                partition[n.id()] = 'A';
-                n.style('background-color', '#007bff');
+            if (cyTree) cyTree.destroy();
+            cyTree = cytoscape({
+                container: document.getElementById('cy-tree'),
+                elements: elements,
+                style: [
+                    { selector: 'node', style: { 
+                        'label': 'data(label)', 
+                        'background-color': '#adb5bd', 
+                        'width': 35, 'height': 35, 
+                        'font-size': '10px', 
+                        'text-valign': 'center', 
+                        'color': '#000',
+                        'text-outline-width': 1,
+                        'text-outline-color': '#fff'
+                    }},
+                    { selector: 'edge', style: { 
+                        'width': 2, 
+                        'line-color': '#ced4da', 
+                        'curve-style': 'taxi', 
+                        'taxi-direction': 'vertical', 
+                        'target-arrow-shape': 'triangle',
+                        'target-arrow-color': '#ced4da'
+                    }},
+                    { selector: 'node[level=0]', style: { 'background-color': '#339af0', 'color': '#fff', 'text-outline-color': '#339af0' }},
+                    { selector: 'node[id="Root"]', style: { 'background-color': '#343a40', 'color': '#fff', 'text-outline-color': '#343a40', 'width': 45, 'height': 45 }},
+                    { selector: ':selected', style: { 'border-width': 3, 'border-color': '#fd7e14' }}
+                ],
+                layout: { 
+                    name: 'breadthfirst', 
+                    directed: true, 
+                    circle: false,
+                    roots: ['#Root'],
+                    spacingFactor: 1.2,
+                    padding: 30 
+                }
             });
-            document.getElementById('results').style.display = 'none';
+
+            cyTree.on('tap', 'node', (e) => {
+                const node = e.target.data();
+                showTreeNodeInfo(node);
+            });
         }
 
-        async function calculateEntropy() {
-            const resp = await axios.post('/api/calculate', { partition });
-            const data = resp.data;
+        function showTreeNodeInfo(n) {
+            const panel = document.getElementById('tree-inspector');
+            const content = document.getElementById('tree-inspector-content');
+            panel.style.display = 'block';
+
+            const totalVol = labData.metrics.vol_total;
+            const h_val = n.contrib.toFixed(5);
+            const c_sum = (n.children_contrib_sum || 0).toFixed(5);
+            const sub_total = (n.subtree_total_h || 0).toFixed(5);
+
+            // Get individual children values for the summation trace
+            let childrenTrace = "";
+            if (n.children_ids && n.children_ids.length > 0) {
+                const vals = n.children_ids.map(cid => {
+                    const child = labData.tree.find(t => t.id === cid);
+                    return child ? child.contrib.toFixed(4) : "0";
+                });
+                childrenTrace = ` (${vals.join(' + ')})`;
+            }
+
+            if (n.id === 'Root') {
+                content.innerHTML = `
+                    <div class="mb-2"><b>Graph Root (\\(\\lambda\\))</b></div>
+                    <div class="alert alert-primary p-2 mb-1" style="font-size: 0.85rem;">
+                        <b>Total Structural Entropy:</b><br>
+                        <span class="fs-5 fw-bold">${sub_total} bits</span>
+                    </div>
+                    <div class="small text-muted mb-2">
+                        Sum of all local contributions in the encoding tree.
+                    </div>
+                    <div class="row small g-1">
+                        <div class="col-12 mb-1">Children Contrib Sum: <b>${c_sum}</b><br><span class="text-muted" style="font-size:0.7rem;">= ${childrenTrace}</span></div>
+                        <div class="col-12">Vol \\(V_\\lambda\\): <b>${n.v}</b></div>
+                    </div>
+                `;
+                if (window.MathJax) MathJax.typesetPromise([content]);
+                return;
+            }
             
-            document.getElementById('results').style.display = 'block';
-            document.getElementById('entropy-val').innerText = data.total_entropy.toFixed(4);
-            
-            const log = document.getElementById('log');
-            log.innerHTML = data.steps.map(s => `
-                <div>${s.msg}</div>
-                ${s.v_c ? `<div class='ps-3 text-secondary'>V_C=${s.v_c}, g_C=${s.g_c}</div>` : ''}
-                ${s.entropy_contribution ? `<div class='ps-3 text-success'>Contribution: ${s.entropy_contribution}</div>` : ''}
-                <hr>
-            `).join('');
+            content.innerHTML = `
+                <div class="mb-2 small"><b>ID:</b> ${n.id} (Level ${n.level})</div>
+                <div class="row small mb-2 g-1">
+                    <div class="col-6">Cut \\(g_\\alpha\\): <b>${n.g}</b></div>
+                    <div class="col-6">Vol \\(V_\\alpha\\): <b>${n.v}</b></div>
+                    <div class="col-6">Parent Vol: <b>${n.v_parent}</b></div>
+                    <div class="col-12 text-primary mt-1">Self Contrib (\\(h_\\alpha\\)): <b>${h_val}</b></div>
+                </div>
+                
+                <div class="bg-light border rounded p-2 mb-2" style="font-size: 0.8rem;">
+                    <div class="fw-bold border-bottom mb-1 pb-1">Aggregation Trace</div>
+                    <div class="small">Sum of Children \\(h\\): <b>${c_sum}</b></div>
+                    <div class="text-muted mb-1" style="font-size: 0.7rem; overflow-x: auto;">= ${childrenTrace}</div>
+                    <div class="d-flex justify-content-between text-success fw-bold">
+                        <span>Cumulative \\(H(subtree)\\):</span> 
+                        <span>${sub_total}</span>
+                    </div>
+                </div>
+
+                <div class="alert alert-light border p-2 mb-2" style="font-size: 0.75rem; background: #fff;">
+                    <b>Local Formula:</b><br>
+                    \\(h_\\alpha = - \\frac{g_\\alpha}{V_{total}} \\log_2 \\frac{V_\\alpha}{V_{parent}}\\)
+                </div>
+                <div class="small"><b>Encodes:</b> [${n.leafs.join(', ')}]</div>
+            `;
+            if (window.MathJax) MathJax.typesetPromise([content]);
         }
 
-        init();
+        async function suggestMove(isAuto = false) {
+            const resp = await axios.post('/api/suggest');
+            if (resp.data.best_move) {
+                const move = resp.data.best_move;
+                addLog(`Node ${move.node} moved to Comm ${move.to}`);
+                await axios.post('/api/update_node', { id: move.node, comm: move.to });
+                await refresh();
+                return true;
+            }
+            if (!isAuto) addLog("No improvement found at this level.", "merge");
+            return false;
+        }
+
+        async function mergeLevel() {
+            const numNodes = cy.nodes().length;
+            const numComms = labData.metrics.traces.length;
+
+            if (numComms >= numNodes) {
+                addLog("Merge failed: Each node is still in its own community.", "merge");
+                return false;
+            }
+
+            const resp = await axios.post('/api/merge');
+            if (resp.data.status === "ok") {
+                addLog(`Aggregated Level ${labData.label.split(':')[0]}`, "merge");
+                await refresh(true);
+                return true;
+            }
+            return false;
+        }
+
+        async function toggleAutoRun() {
+            autoRunning = !autoRunning;
+            const btn = document.getElementById('auto-btn');
+            btn.innerText = autoRunning ? "Stop Auto" : "Auto Louvain";
+            btn.className = autoRunning ? "btn btn-dark btn-sm flex-fill" : "btn btn-danger btn-sm flex-fill";
+            if (autoRunning) {
+                addLog("Starting Auto Louvain...");
+                autoLoop();
+            }
+        }
+
+        async function autoLoop() {
+            if (!autoRunning) return;
+            
+            const moved = await suggestMove(true);
+            if (moved) {
+                setTimeout(autoLoop, 150);
+            } else {
+                // No more local moves possible at this level
+                const merged = await mergeLevel();
+                if (merged) {
+                    setTimeout(autoLoop, 600);
+                } else {
+                    // No move and no merge possible
+                    autoRunning = false;
+                    addLog("Auto Louvain: Convergence reached.", "merge");
+                    const btn = document.getElementById('auto-btn');
+                    btn.innerText = "Auto Louvain";
+                    btn.className = "btn btn-danger btn-sm flex-fill";
+                }
+            }
+        }
+
+        function openInspector(el) {
+            const panel = document.getElementById('inspector-panel');
+            const content = document.getElementById('inspector-content');
+            panel.style.display = 'block';
+            if (el.isNode()) {
+                content.innerHTML = `
+                    <div class="small">Target: <b>Node ${el.id()}</b></div>
+                    <label class="small mt-1">Community:</label>
+                    <input type="number" id="edit-comm" class="form-control form-control-sm" value="${labData.partition[el.id()]}">
+                `;
+            } else {
+                content.innerHTML = `
+                    <div class="small">Target: <b>Edge ${el.data('source')}-${el.data('target')}</b></div>
+                    <label class="small mt-1">Weight:</label>
+                    <input type="number" id="edit-weight" class="form-control form-control-sm" value="${el.data('weight')}">
+                `;
+            }
+        }
+
+        async function saveChanges() {
+            if (!selectedElement) return;
+            if (selectedElement.isNode()) {
+                const val = document.getElementById('edit-comm').value;
+                addLog(`Manual Move: Node ${selectedElement.id()} -> Comm ${val}`);
+                await axios.post('/api/update_node', { id: selectedElement.id(), comm: val });
+            } else {
+                const val = document.getElementById('edit-weight').value;
+                addLog(`Manual Weight: Edge ${selectedElement.id()} -> ${val}`);
+                await axios.post('/api/update_edge', { u: selectedElement.data('source'), v: selectedElement.data('target'), weight: val });
+            }
+            await refresh();
+        }
+
+        async function loadPreset() {
+            await axios.post('/api/preset', { type: document.getElementById('preset-select').value });
+            await refresh(true);
+        }
+
+        async function switchLevel(idx) {
+            await axios.post('/api/switch_level', { idx: idx });
+            await refresh(true);
+        }
+
+        // Fix for Cytoscape in Tabs: re-run layout when tab is shown
+        document.getElementById('details-tab').addEventListener('shown.bs.tab', () => {
+            if (cyTree) {
+                cyTree.resize();
+                cyTree.layout({ name: 'breadthfirst', directed: true, roots: ['#Root'] }).run();
+            }
+        });
+
+        // Trigger mathjax for static theory tab
+        document.getElementById('theory-tab').addEventListener('shown.bs.tab', () => {
+            if (window.MathJax) MathJax.typesetPromise();
+        });
+
+        // Knowledge Base Loader
+        const wikiModal = new bootstrap.Modal(document.getElementById('wikiModal'));
+        
+        async function openWiki(topic) {
+            const body = document.getElementById('wiki-modal-body');
+            body.innerHTML = '<div class="text-center p-5"><div class="spinner-border text-primary"></div></div>';
+            wikiModal.show();
+            
+            try {
+                const resp = await axios.get(`/api/wiki/${topic}`);
+                if (window.marked) {
+                    body.innerHTML = marked.parse(resp.data.content);
+                    if (window.MathJax) MathJax.typesetPromise([body]);
+                } else {
+                    body.innerText = resp.data.content;
+                }
+            } catch (e) {
+                body.innerHTML = `<div class="alert alert-danger">Error loading wiki: ${e.message}</div>`;
+            }
+        }
+
+        refresh(true);
     </script>
 </body>
 </html>
