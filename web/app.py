@@ -318,6 +318,8 @@ lab = LabManager()
 def api_state():
     curr = lab.get_current()
     metrics = lab.calculate_metrics()
+    
+    # Current level graph elements
     elements = [{"data": {"id": str(n)}} for n in curr["G"].nodes()]
     for u, v, d in curr["G"].edges(data=True):
         elements.append({"data": {
@@ -326,6 +328,18 @@ def api_state():
             "target": str(v), 
             "weight": d.get('weight', 1.0)
         }})
+
+    # All level edges for 3D visualization
+    all_level_edges = []
+    for l_idx, lvl in enumerate(lab.levels):
+        for u, v, d in lvl["G"].edges(data=True):
+            all_level_edges.append({
+                "level": l_idx,
+                "source": f"L{l_idx}_{u}",
+                "target": f"L{l_idx}_{v}",
+                "weight": d.get('weight', 1.0)
+            })
+
     return jsonify({
         "elements": elements, 
         "partition": curr["partition"], 
@@ -333,7 +347,8 @@ def api_state():
         "label": curr["label"],
         "history": [lvl["label"] for lvl in lab.levels],
         "current_idx": lab.current_level,
-        "tree": lab.get_encoding_tree()
+        "tree": lab.get_encoding_tree(),
+        "level_edges": all_level_edges
     })
 
 @app.route('/api/switch_level', methods=['POST'])
@@ -406,4 +421,4 @@ def index():
 
 if __name__ == '__main__':
     # Use port 8000 for standard access
-    app.run(host='0.0.0.0', port=8002, debug=False)
+    app.run(host='0.0.0.0', port=8004, debug=False)

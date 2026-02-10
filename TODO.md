@@ -3,10 +3,8 @@
 Track upcoming features and technical improvements for the Structural Information Laboratory.
 
 ## Phase A: UX & Layout Refinement
-- [ ] **Split-Screen Layout**: Redesign UI to show the 2D Topology and 3D Encoding Tree simultaneously without tab switching.
-- [ ] **Interactive Drill-Down**: Allow clicking on community nodes in L1+ to "unwrap" and see internal nodes from lower levels.
-- [ ] **Internal Energy Viz**: Improve Cytoscape styles to visualize "Self-Loops" as a representation of community internal density.
-- [ ] **MathJax Optimization**: Implement lazy-loading for MathJax to improve dashboard responsiveness.
+- [x] **Split-Screen Layout**: Redesign UI to show the 2D Topology and 3D Encoding Tree simultaneously without tab switching. using 3.js, specifically:  the lowest layer is original 2D topology, one layer upper is the super node representing the community in the lower layer, and so on.
+
 
 ## Phase B: Algorithmic Depth
 - [ ] **Leiden Integration**: Add support for the Leiden algorithm to fix "disconnected community" artifacts common in Louvain.

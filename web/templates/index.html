@@ -3,6 +3,8 @@
 <head>
     <title>SI-Lab Trace: Move & Merge</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.26.0/cytoscape.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
     <script>
         window.MathJax = {
@@ -25,8 +27,9 @@
         #main { flex: 1; display: flex; overflow: hidden; }
         #sidebar { width: 480px; background: white; border-right: 1px solid #dee2e6; padding: 20px; display: flex; flex-direction: column; overflow: hidden; }
         #sidebar-scroll { flex: 1; overflow-y: auto; padding-right: 5px; }
-        #canvas { flex: 1; position: relative; }
-        #cy { width: 100%; height: 100%; }
+        #views-container { flex: 1; display: flex; flex-direction: column; }
+        #cy { height: 50%; border-bottom: 2px solid #343a40; }
+        #three-container { height: 50%; position: relative; background: #ffffff; }
         #cy-tree { width: 100%; height: 300px; border: 1px solid #ddd; background: #fff; margin-bottom: 15px; }
         .phase-box { border: 1px solid #ddd; border-radius: 8px; padding: 12px; margin-bottom: 15px; }
         .inspector-panel { background: #e7f5ff; border: 1px solid #74c0fc; border-radius: 8px; padding: 12px; margin-top: 15px; }
@@ -167,8 +170,9 @@
                 <div id="log-container" style="flex:1; overflow-y: auto; background: #f8f9fa; border: 1px solid #eee; padding: 5px;"></div>
             </div>
         </div>
-        <div id="canvas">
+        <div id="views-container">
             <div id="cy"></div>
+            <div id="three-container"></div>
         </div>
     </div>
 
@@ -195,6 +199,175 @@
         let selectedElement = null;
         let autoRunning = false;
         const colors = ['#339af0', '#ff6b6b', '#fcc419', '#51cf66', '#845ef7', '#ff922b', '#20c997', '#adb5bd', '#343a40'];
+
+        // --- Three.js Variables ---
+        let scene, camera, renderer, controls;
+        let threeNodes = [];
+        let threeEdges = [];
+
+        function initThree() {
+            const container = document.getElementById('three-container');
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xffffff);
+            camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1, 2000);
+            camera.position.set(0, 300, 600);
+            
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            container.appendChild(renderer.domElement);
+
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(200, 500, 200);
+            scene.add(directionalLight);
+
+            window.addEventListener('resize', () => {
+                camera.aspect = container.clientWidth / container.clientHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(container.clientWidth, container.clientHeight);
+            });
+
+            animate();
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        function render3DTree() {
+            if (!labData.tree) return;
+
+            // Clear previous objects
+            threeNodes.forEach(obj => scene.remove(obj));
+            threeEdges.forEach(obj => scene.remove(obj));
+            threeNodes = [];
+            threeEdges = [];
+
+            const nodeObjects = {};
+            const levelHeight = 100;
+
+            // First pass: create node mesh and calculate positions
+            const l0Nodes = labData.tree.filter(n => n.level === 0);
+            const numL0 = l0Nodes.length;
+            const radius = Math.max(300, numL0 * 20);
+
+            // Group tree nodes by level to process sequentially
+            const nodesByLevel = {};
+            labData.tree.forEach(n => {
+                if (!nodesByLevel[n.level]) nodesByLevel[n.level] = [];
+                nodesByLevel[n.level].push(n);
+            });
+
+            labData.tree.forEach((n) => {
+                let x, z;
+                const y = n.level * levelHeight;
+
+                if (n.level === 0) {
+                    const nodeName = n.label.split('] ')[1];
+                    const cyNode = cy ? cy.getElementById(nodeName) : null;
+                    if (cyNode && cyNode.length) {
+                        const pos = cyNode.position();
+                        // Center the layout in 3D space
+                        const extent = cy.extent();
+                        const centerX = extent.x1 + (extent.x2 - extent.x1) / 2;
+                        const centerY = extent.y1 + (extent.y2 - extent.y1) / 2;
+                        x = (pos.x - centerX) * 1.5; // Scale slightly for better visibility
+                        z = (pos.y - centerY) * 1.5; 
+                    } else {
+                        const l0Idx = l0Nodes.findIndex(ln => ln.id === n.id);
+                        const angle = (l0Idx / numL0) * Math.PI * 2;
+                        x = Math.cos(angle) * radius;
+                        z = Math.sin(angle) * radius;
+                    }
+                } else {
+                    x = 0; z = 0;
+                }
+                
+                const geometry = new THREE.SphereGeometry(8, 16, 16);
+                let color = 0xadb5bd;
+                if (n.level === 0) {
+                    const cid = labData.partition[n.label.split('] ')[1]] || 0;
+                    color = colors[cid % colors.length].replace('#', '0x');
+                } else if (n.id === 'Root') {
+                    color = 0x343a40;
+                } else {
+                    color = 0xfd7e14;
+                }
+
+                const material = new THREE.MeshPhongMaterial({ color: parseInt(color) });
+                const mesh = new THREE.Mesh(geometry, material);
+                mesh.position.set(x, y, z);
+                scene.add(mesh);
+                threeNodes.push(mesh);
+                nodeObjects[n.id] = { mesh, data: n };
+            });
+
+            // Update positions from bottom up
+            const sortedLevels = [...new Set(labData.tree.map(n => n.level))].sort((a,b) => a-b);
+            sortedLevels.forEach(lvl => {
+                if (lvl === 0) return;
+                labData.tree.filter(n => n.level === lvl).forEach(n => {
+                    const children = labData.tree.filter(tn => tn.parent === n.id);
+                    if (children.length > 0) {
+                        let avgX = 0, avgZ = 0;
+                        children.forEach(c => {
+                            avgX += nodeObjects[c.id].mesh.position.x;
+                            avgZ += nodeObjects[c.id].mesh.position.z;
+                        });
+                        nodeObjects[n.id].mesh.position.x = avgX / children.length;
+                        nodeObjects[n.id].mesh.position.z = avgZ / children.length;
+                    }
+                });
+            });
+
+            // Second pass: Draw edges
+            // Tree Edges (Vertical)
+            labData.tree.forEach(n => {
+                if (n.parent && nodeObjects[n.parent]) {
+                    const childPos = nodeObjects[n.id].mesh.position;
+                    const parentPos = nodeObjects[n.parent].mesh.position;
+                    
+                    const points = [childPos, parentPos];
+                    const geometry = new THREE.BufferGeometry().setFromPoints(points);
+                    const material = new THREE.LineBasicMaterial({ color: 0x888888, transparent: true, opacity: 0.3 });
+                    const line = new THREE.Line(geometry, material);
+                    scene.add(line);
+                    threeEdges.push(line);
+                }
+            });
+
+            // Graph Edges (Horizontal, at each level)
+            if (labData.level_edges) {
+                labData.level_edges.forEach(e => {
+                    if (nodeObjects[e.source] && nodeObjects[e.target]) {
+                        const p1 = nodeObjects[e.source].mesh.position;
+                        const p2 = nodeObjects[e.target].mesh.position;
+                        const points = [p1, p2];
+                        const geometry = new THREE.BufferGeometry().setFromPoints(points);
+                        const material = new THREE.LineBasicMaterial({ color: 0xadb5bd, transparent: true, opacity: 0.6 });
+                        const line = new THREE.Line(geometry, material);
+                        scene.add(line);
+                        threeEdges.push(line);
+                    }
+                });
+            }
+            
+            // Add Plane for each level
+            sortedLevels.forEach(lvl => {
+                const y = lvl * levelHeight;
+                const grid = new THREE.GridHelper(radius * 3, 20, 0xdee2e6, 0xf1f3f5);
+                grid.position.y = y - 5;
+                scene.add(grid);
+                threeNodes.push(grid); // Treat as node for easy cleanup
+            });
+        }
 
         function addLog(msg, type='move') {
             const container = document.getElementById('log-container');
@@ -264,6 +437,8 @@
                         layout: { name: 'cose', padding: 50, animate: true }
                     });
 
+                    cy.on('layoutstop', () => render3DTree());
+
                     cy.on('tap', (e) => {
                         if (e.target && e.target.isNode && e.target.isNode()) {
                             selectedElement = e.target;
@@ -284,6 +459,7 @@
                     if (cyNodeIds !== dataNodes) {
                         cy.elements().remove();
                         cy.add(labData.elements);
+                        cy.off('layoutstop').on('layoutstop', () => render3DTree());
                         cy.layout({ name: 'cose', animate: true, padding: 50 }).run();
                     } else {
                         // Update existing elements data
@@ -325,6 +501,7 @@
                 document.getElementById('trace-container').innerHTML = traceHtml;
 
                 renderCalculationTree();
+                render3DTree();
             } catch (err) {
                 console.error("Refresh Error:", err);
                 addLog(`Error: ${err.message}`, "merge");
@@ -598,6 +775,7 @@
             }
         }
 
+        initThree();
         refresh(true);
     </script>
 </body>
