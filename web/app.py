@@ -110,14 +110,16 @@ class LabManager:
                 g_alpha = nx.cut_size(self.G0, leafs, weight='weight')
                 
                 # The parent is either the community in the next level, 
-                # OR if this is the top level Gk, the parent is the community id in Lk
+                # OR if this is the top level Gk, the parent is the community id or Root
+                p_comm = partition.get(node)
                 if l_idx < len(self.levels) - 1:
-                    p_comm = partition.get(node)
                     parent_id = f"L{l_idx+1}_{p_comm}"
                 else:
-                    # Final level materializes its partition as a virtual level before Root
-                    p_comm = partition.get(node)
-                    parent_id = f"Comm_{p_comm}"
+                    # If partition is identity (num_comms == num_nodes), skip Comm layer and go to Root
+                    if len(set(partition.values())) == len(G_lvl):
+                        parent_id = "Root"
+                    else:
+                        parent_id = f"Comm_{p_comm}"
                 
                 tree_elements.append({
                     "id": tree_id, "label": f"[{l_idx}] {node}", "level": l_idx,
@@ -126,26 +128,33 @@ class LabManager:
 
         # 2. Add the "Current Partition" Layer (Virtual parent of Lk)
         curr_lvl = self.levels[-1]
-        unique_comms = sorted(list(set(curr_lvl["partition"].values())))
-        for cid in unique_comms:
-            # Nodes in Lk that belong to this cid
-            lk_nodes = [nid for nid, c in curr_lvl["partition"].items() if c == cid]
-            # Accumulate original leafs
-            all_leafs = []
-            for lk_n in lk_nodes:
-                all_leafs.extend(get_l0_leafs(len(self.levels)-1, lk_n))
-            
-            v_c = sum(dict(self.G0.degree(all_leafs, weight='weight')).values())
-            g_c = nx.cut_size(self.G0, all_leafs, weight='weight')
-            
-            tree_elements.append({
-                "id": f"Comm_{cid}", "label": f"Comm {cid}", 
-                "level": len(self.levels), "parent": "Root",
-                "v": v_c, "g": g_c, "leafs": all_leafs
-            })
+        partition = curr_lvl["partition"]
+        unique_comms = sorted(list(set(partition.values())))
+        
+        # Only add Comm layer if it compresses nodes
+        is_comm_redundant = (len(unique_comms) == len(curr_lvl["G"]))
+        
+        root_level = len(self.levels)
+        if not is_comm_redundant:
+            for cid in unique_comms:
+                # Nodes in Lk that belong to this cid
+                lk_nodes = [nid for nid, c in partition.items() if c == cid]
+                all_leafs = []
+                for lk_n in lk_nodes:
+                    all_leafs.extend(get_l0_leafs(len(self.levels)-1, lk_n))
+                
+                v_c = sum(dict(self.G0.degree(all_leafs, weight='weight')).values())
+                g_c = nx.cut_size(self.G0, all_leafs, weight='weight')
+                
+                tree_elements.append({
+                    "id": f"Comm_{cid}", "label": f"Comm {cid}", 
+                    "level": len(self.levels), "parent": "Root",
+                    "v": v_c, "g": g_c, "leafs": all_leafs
+                })
+            root_level = len(self.levels) + 1
 
         tree_elements.append({
-            "id": "Root", "label": "Graph Root (\u03bb)", "level": len(self.levels) + 1,
+            "id": "Root", "label": "Graph Root (\u03bb)", "level": root_level,
             "v": total_vol, "g": 0, "parent": None, "contrib": 0
         })
 
@@ -421,4 +430,4 @@ def index():
 
 if __name__ == '__main__':
     # Use port 8000 for standard access
-    app.run(host='0.0.0.0', port=8004, debug=False)
+    app.run(host='0.0.0.0', port=8006, debug=False)

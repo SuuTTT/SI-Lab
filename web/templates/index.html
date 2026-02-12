@@ -5,6 +5,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.26.0/cytoscape.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tween.js/18.6.4/tween.umd.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
     <script>
         window.MathJax = {
@@ -204,6 +205,7 @@
         let scene, camera, renderer, controls;
         let threeNodes = [];
         let threeEdges = [];
+        let l0Positions = {}; // Persistent positions for L0 nodes
 
         function initThree() {
             const container = document.getElementById('three-container');
@@ -238,135 +240,276 @@
         function animate() {
             requestAnimationFrame(animate);
             controls.update();
+            TWEEN.update();
+            updateEdgePositions();
             renderer.render(scene, camera);
         }
 
-        function render3DTree() {
+        function updateEdgePositions() {
+            threeEdges.forEach(edge => {
+                if (edge.sourceObj && edge.targetObj) {
+                    const pos = edge.geometry.attributes.position;
+                    pos.setXYZ(0, edge.sourceObj.position.x, edge.sourceObj.position.y, edge.sourceObj.position.z);
+                    pos.setXYZ(1, edge.targetObj.position.x, edge.targetObj.position.y, edge.targetObj.position.z);
+                    pos.needsUpdate = true;
+                }
+            });
+        }
+
+        let current3DLevel = 0;
+        let isConverged = false;
+
+        function render3DTree(forceRebuild = false) {
             if (!labData.tree) return;
 
-            // Clear previous objects
-            threeNodes.forEach(obj => scene.remove(obj));
-            threeEdges.forEach(obj => scene.remove(obj));
-            threeNodes = [];
-            threeEdges = [];
+            const levelHeight = 120;
+            const targetVisibleLevel = labData.current_idx;
+            
+            // Hard reset if requested
+            if (forceRebuild) {
+                threeNodes.forEach(obj => scene.remove(obj));
+                threeEdges.forEach(obj => scene.remove(obj));
+                threeNodes = [];
+                threeEdges = [];
+                current3DLevel = -1;
+            }
 
-            const nodeObjects = {};
-            const levelHeight = 100;
-
-            // First pass: create node mesh and calculate positions
             const l0Nodes = labData.tree.filter(n => n.level === 0);
             const numL0 = l0Nodes.length;
             const radius = Math.max(300, numL0 * 20);
 
-            // Group tree nodes by level to process sequentially
-            const nodesByLevel = {};
-            labData.tree.forEach(n => {
-                if (!nodesByLevel[n.level]) nodesByLevel[n.level] = [];
-                nodesByLevel[n.level].push(n);
-            });
-
-            labData.tree.forEach((n) => {
-                let x, z;
-                const y = n.level * levelHeight;
-
-                if (n.level === 0) {
+            // Step 1: Update L0 Positions from Cytoscape (ONLY if we are at level 0)
+            if (labData.current_idx === 0 && cy) {
+                l0Nodes.forEach(n => {
                     const nodeName = n.label.split('] ')[1];
-                    const cyNode = cy ? cy.getElementById(nodeName) : null;
-                    if (cyNode && cyNode.length) {
+                    const cyNode = cy.getElementById(nodeName);
+                    if (cyNode.length) {
                         const pos = cyNode.position();
-                        // Center the layout in 3D space
                         const extent = cy.extent();
                         const centerX = extent.x1 + (extent.x2 - extent.x1) / 2;
                         const centerY = extent.y1 + (extent.y2 - extent.y1) / 2;
-                        x = (pos.x - centerX) * 1.5; // Scale slightly for better visibility
-                        z = (pos.y - centerY) * 1.5; 
-                    } else {
-                        const l0Idx = l0Nodes.findIndex(ln => ln.id === n.id);
-                        const angle = (l0Idx / numL0) * Math.PI * 2;
-                        x = Math.cos(angle) * radius;
-                        z = Math.sin(angle) * radius;
-                    }
-                } else {
-                    x = 0; z = 0;
-                }
-                
-                const geometry = new THREE.SphereGeometry(8, 16, 16);
-                let color = 0xadb5bd;
-                if (n.level === 0) {
-                    const cid = labData.partition[n.label.split('] ')[1]] || 0;
-                    color = colors[cid % colors.length].replace('#', '0x');
-                } else if (n.id === 'Root') {
-                    color = 0x343a40;
-                } else {
-                    color = 0xfd7e14;
-                }
-
-                const material = new THREE.MeshPhongMaterial({ color: parseInt(color) });
-                const mesh = new THREE.Mesh(geometry, material);
-                mesh.position.set(x, y, z);
-                scene.add(mesh);
-                threeNodes.push(mesh);
-                nodeObjects[n.id] = { mesh, data: n };
-            });
-
-            // Update positions from bottom up
-            const sortedLevels = [...new Set(labData.tree.map(n => n.level))].sort((a,b) => a-b);
-            sortedLevels.forEach(lvl => {
-                if (lvl === 0) return;
-                labData.tree.filter(n => n.level === lvl).forEach(n => {
-                    const children = labData.tree.filter(tn => tn.parent === n.id);
-                    if (children.length > 0) {
-                        let avgX = 0, avgZ = 0;
-                        children.forEach(c => {
-                            avgX += nodeObjects[c.id].mesh.position.x;
-                            avgZ += nodeObjects[c.id].mesh.position.z;
-                        });
-                        nodeObjects[n.id].mesh.position.x = avgX / children.length;
-                        nodeObjects[n.id].mesh.position.z = avgZ / children.length;
-                    }
-                });
-            });
-
-            // Second pass: Draw edges
-            // Tree Edges (Vertical)
-            labData.tree.forEach(n => {
-                if (n.parent && nodeObjects[n.parent]) {
-                    const childPos = nodeObjects[n.id].mesh.position;
-                    const parentPos = nodeObjects[n.parent].mesh.position;
-                    
-                    const points = [childPos, parentPos];
-                    const geometry = new THREE.BufferGeometry().setFromPoints(points);
-                    const material = new THREE.LineBasicMaterial({ color: 0x888888, transparent: true, opacity: 0.3 });
-                    const line = new THREE.Line(geometry, material);
-                    scene.add(line);
-                    threeEdges.push(line);
-                }
-            });
-
-            // Graph Edges (Horizontal, at each level)
-            if (labData.level_edges) {
-                labData.level_edges.forEach(e => {
-                    if (nodeObjects[e.source] && nodeObjects[e.target]) {
-                        const p1 = nodeObjects[e.source].mesh.position;
-                        const p2 = nodeObjects[e.target].mesh.position;
-                        const points = [p1, p2];
-                        const geometry = new THREE.BufferGeometry().setFromPoints(points);
-                        const material = new THREE.LineBasicMaterial({ color: 0xadb5bd, transparent: true, opacity: 0.6 });
-                        const line = new THREE.Line(geometry, material);
-                        scene.add(line);
-                        threeEdges.push(line);
+                        l0Positions[n.id] = {
+                            x: (pos.x - centerX) * 1.5,
+                            z: (pos.y - centerY) * 1.5
+                        };
                     }
                 });
             }
+
+            // Step 2: Calculate positions for all tree nodes (Bottom-Up)
+            const nodePositions = {};
+            const sortedLevels = [...new Set(labData.tree.map(n => n.level))].sort((a,b) => a-b);
             
-            // Add Plane for each level
             sortedLevels.forEach(lvl => {
-                const y = lvl * levelHeight;
-                const grid = new THREE.GridHelper(radius * 3, 20, 0xdee2e6, 0xf1f3f5);
-                grid.position.y = y - 5;
-                scene.add(grid);
-                threeNodes.push(grid); // Treat as node for easy cleanup
+                labData.tree.filter(n => n.level === lvl).forEach(n => {
+                    if (lvl === 0) {
+                        // Use stored L0 pos or fallback to circular
+                        if (l0Positions[n.id]) {
+                            nodePositions[n.id] = { x: l0Positions[n.id].x, z: l0Positions[n.id].z, y: 0 };
+                        } else {
+                            const l0Idx = l0Nodes.findIndex(ln => ln.id === n.id);
+                            const angle = (l0Idx / numL0) * Math.PI * 2;
+                            nodePositions[n.id] = { 
+                                x: Math.cos(angle) * radius, 
+                                z: Math.sin(angle) * radius,
+                                y: 0 
+                            };
+                            l0Positions[n.id] = { x: nodePositions[n.id].x, z: nodePositions[n.id].z };
+                        }
+                    } else {
+                        // Position is average of children
+                        const children = labData.tree.filter(tn => tn.parent === n.id);
+                        if (children.length > 0) {
+                            let avgX = 0, avgZ = 0;
+                            children.forEach(c => {
+                                // If child pos not calculated yet (shouldn't happen with sortedLevels), fallback
+                                const cPos = nodePositions[c.id] || {x:0, z:0};
+                                avgX += cPos.x;
+                                avgZ += cPos.z;
+                            });
+                            nodePositions[n.id] = { 
+                                x: avgX / children.length, 
+                                z: avgZ / children.length,
+                                y: lvl * levelHeight
+                            };
+                        } else {
+                            nodePositions[n.id] = { x: 0, z: 0, y: lvl * levelHeight };
+                        }
+                    }
+                });
             });
+
+            // Step 3: Render / Update L0 Nodes
+            l0Nodes.forEach(n => {
+                const nodeName = n.label.split('] ')[1];
+                
+                // Color lookup: if we are at L0, use partition. 
+                // If we are at L > 0, we can look up the community from the tree.
+                let cid = 0;
+                if (labData.current_idx === 0) {
+                    cid = labData.partition[nodeName];
+                } else {
+                    // Find ancestor at current level
+                    let current = n;
+                    while (current && current.level < labData.current_idx) {
+                        current = labData.tree.find(tn => tn.id === current.parent);
+                    }
+                    if (current) {
+                        const parts = current.label.split('] ');
+                        cid = parseInt(parts[parts.length-1]) || 0;
+                    }
+                }
+                
+                const colorHex = colors[cid % colors.length] || '#adb5bd';
+                const colorInt = parseInt(colorHex.replace('#', '0x'));
+                
+                let mesh = threeNodes.find(obj => obj.treeId === n.id);
+                if (!mesh) {
+                    const geom = new THREE.SphereGeometry(8, 16, 16);
+                    const mat = new THREE.MeshPhongMaterial({ color: colorInt });
+                    mesh = new THREE.Mesh(geom, mat);
+                    mesh.treeId = n.id;
+                    mesh.level = 0;
+                    scene.add(mesh);
+                    threeNodes.push(mesh);
+                } else {
+                    mesh.material.color.setHex(colorInt);
+                }
+                mesh.position.set(nodePositions[n.id].x, 0, nodePositions[n.id].z);
+            });
+
+            // Step 4: Animation for lifting new levels
+            if (targetVisibleLevel > current3DLevel) {
+                for (let lvl = 1; lvl <= targetVisibleLevel; lvl++) {
+                    const levelNodes = labData.tree.filter(n => n.level === lvl);
+                    levelNodes.forEach(n => {
+                        let mesh = threeNodes.find(obj => obj.treeId === n.id);
+                        if (!mesh) {
+                            const geom = new THREE.SphereGeometry(12, 16, 16);
+                            const mat = new THREE.MeshPhongMaterial({ color: 0xfd7e14 });
+                            mesh = new THREE.Mesh(geom, mat);
+                            
+                            // Start from average of children but at level lvl-1
+                            mesh.position.set(nodePositions[n.id].x, (lvl - 1) * levelHeight, nodePositions[n.id].z);
+                            mesh.treeId = n.id;
+                            mesh.level = lvl;
+                            scene.add(mesh);
+                            threeNodes.push(mesh);
+
+                            new TWEEN.Tween(mesh.position)
+                                .to({ y: nodePositions[n.id].y }, 1000)
+                                .easing(TWEEN.Easing.Cubic.Out)
+                                .start();
+
+                            // Add vertical edges arriving at this node
+                            const children = labData.tree.filter(cn => cn.parent === n.id);
+                            children.forEach(c => {
+                                const childMesh = threeNodes.find(m => m.treeId === c.id);
+                                if (childMesh) {
+                                    const pts = [new THREE.Vector3().copy(childMesh.position), new THREE.Vector3().copy(mesh.position)];
+                                    const lineGeom = new THREE.BufferGeometry().setFromPoints(pts);
+                                    // User requested grey for inter-layer edges (Tree edges)
+                                    const lineMat = new THREE.LineBasicMaterial({ color: 0x999999, transparent: true, opacity: 0 });
+                                    const line = new THREE.Line(lineGeom, lineMat);
+                                    line.treeId = `edge_${c.id}_${n.id}`;
+                                    line.sourceObj = childMesh;
+                                    line.targetObj = mesh;
+                                    scene.add(line);
+                                    threeEdges.push(line);
+
+                                    new TWEEN.Tween(lineMat).to({ opacity: 0.5 }, 1000).start();
+                                }
+                            });
+                        }
+                    });
+
+                    // Grid reveal
+                    if (!threeNodes.find(obj => obj.isGrid && obj.level === lvl)) {
+                        const grid = new THREE.GridHelper(radius * 3, 20, 0xdee2e6, 0xf1f3f5);
+                        grid.position.y = lvl * levelHeight - 5;
+                        grid.material.transparent = true;
+                        grid.material.opacity = 0;
+                        grid.isGrid = true;
+                        grid.level = lvl;
+                        scene.add(grid);
+                        threeNodes.push(grid);
+                        new TWEEN.Tween(grid.material).to({ opacity: 1 }, 1000).start();
+                    }
+                }
+                current3DLevel = targetVisibleLevel;
+            }
+
+            // Step 5: Final Convergence - Lift Comm and Root Nodes
+            if (isConverged) {
+                const maxTreeLevel = Math.max(...labData.tree.map(n => n.level));
+                for (let lvl = targetVisibleLevel + 1; lvl <= maxTreeLevel; lvl++) {
+                    const levelNodes = labData.tree.filter(n => n.level === lvl);
+                    levelNodes.forEach(n => {
+                        let mesh = threeNodes.find(obj => obj.treeId === n.id);
+                        if (!mesh) {
+                            const isRoot = n.id === 'Root';
+                            const geom = new THREE.SphereGeometry(isRoot ? 20 : 15, 16, 16);
+                            const mat = new THREE.MeshPhongMaterial({ color: isRoot ? 0x343a40 : 0xadb5bd });
+                            mesh = new THREE.Mesh(geom, mat);
+                            
+                            mesh.position.set(nodePositions[n.id].x, (lvl - 1) * levelHeight, nodePositions[n.id].z);
+                            mesh.treeId = n.id;
+                            mesh.level = lvl;
+                            scene.add(mesh);
+                            threeNodes.push(mesh);
+
+                            new TWEEN.Tween(mesh.position)
+                                .to({ y: nodePositions[n.id].y }, 1500)
+                                .easing(isRoot ? TWEEN.Easing.Bounce.Out : TWEEN.Easing.Cubic.Out)
+                                .start();
+
+                            // Edges
+                            const children = labData.tree.filter(cn => cn.parent === n.id);
+                            children.forEach(c => {
+                                const childMesh = threeNodes.find(m => m.treeId === c.id);
+                                if (childMesh) {
+                                    const pts = [new THREE.Vector3().copy(childMesh.position), new THREE.Vector3().copy(mesh.position)];
+                                    const lineGeom = new THREE.BufferGeometry().setFromPoints(pts);
+                                    const lineMat = new THREE.LineBasicMaterial({ color: 0x999999, transparent: true, opacity: 0 });
+                                    const line = new THREE.Line(lineGeom, lineMat);
+                                    line.treeId = `edge_${c.id}_${n.id}`;
+                                    line.sourceObj = childMesh;
+                                    line.targetObj = mesh;
+                                    scene.add(line);
+                                    threeEdges.push(line);
+                                    new TWEEN.Tween(lineMat).to({ opacity: 0.6 }, 1000).start();
+                                }
+                            });
+                        }
+                    });
+                }
+            }
+
+            // Step 6: Create Horizontal Graph Edges
+            if (labData.level_edges) {
+                labData.level_edges.forEach(e => {
+                    if (e.level <= targetVisibleLevel) {
+                        const edgeId = `graph_${e.source}_${e.target}`;
+                        let edge = threeEdges.find(o => o.treeId === edgeId);
+                        const n1 = threeNodes.find(o => o.treeId === e.source);
+                        const n2 = threeNodes.find(o => o.treeId === e.target);
+                        
+                        if (n1 && n2) {
+                            if (!edge) {
+                                const pts = [n1.position, n2.position];
+                                const geom = new THREE.BufferGeometry().setFromPoints(pts);
+                                const mat = new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.6 });
+                                edge = new THREE.Line(geom, mat);
+                                edge.treeId = edgeId;
+                                edge.sourceObj = n1;
+                                edge.targetObj = n2;
+                                scene.add(edge);
+                                threeEdges.push(edge);
+                            }
+                        }
+                    }
+                });
+            }
         }
 
         function addLog(msg, type='move') {
@@ -501,7 +644,7 @@
                 document.getElementById('trace-container').innerHTML = traceHtml;
 
                 renderCalculationTree();
-                render3DTree();
+                render3DTree(initCy);
             } catch (err) {
                 console.error("Refresh Error:", err);
                 addLog(`Error: ${err.message}`, "merge");
@@ -690,10 +833,12 @@
                 } else {
                     // No move and no merge possible
                     autoRunning = false;
+                    isConverged = true;
                     addLog("Auto Louvain: Convergence reached.", "merge");
                     const btn = document.getElementById('auto-btn');
                     btn.innerText = "Auto Louvain";
                     btn.className = "btn btn-danger btn-sm flex-fill";
+                    render3DTree(); // Trigger Root lift
                 }
             }
         }
@@ -733,11 +878,15 @@
 
         async function loadPreset() {
             await axios.post('/api/preset', { type: document.getElementById('preset-select').value });
+            isConverged = false;
+            render3DTree(true);
             await refresh(true);
         }
 
         async function switchLevel(idx) {
             await axios.post('/api/switch_level', { idx: idx });
+            isConverged = false;
+            render3DTree(true);
             await refresh(true);
         }
 
