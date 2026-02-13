@@ -2,7 +2,20 @@
 
 All notable changes to the SI-Lab visualizer will be documented in this file.
 
-## [v0.6.0] - 2026-02-08 (Current)
+## [v0.7.0] - 2026-02-12 (Current)
+### Added
+- **Split-Screen Layout**: Implemented side-by-side visualization with 2D Cytoscape (Topology) and 3D Three.js (Encoding Tree).
+- **3D Interactive Tree**: High-performance 3D rendering with OrbitControls and white minimalist aesthetic.
+- **Animation Suite**: Integrated TWEEN.js for "lifting" supernodes during aggregation and a specialized "bounce" for final root convergence.
+- **2D/3D Synchronization**: Real-time position tracking between Cytoscape coordinates and the 3D Level 0 plane.
+- **Dynamic Edge Styling**: Color-coded visualization (Black for horizontal topology, Grey for vertical hierarchy tree).
+
+### Fixed
+- **Hierarchy Redundancy**: Optimized `get_encoding_tree` to automatically prune redundant partition layers.
+- **Edge Connectivity**: Fixed a bug where vertical edges failed to track moving nodes across hierarchy levels.
+- **Persistence**: Implemented `l0Positions` cache to prevent 3D model reset during state updates.
+
+## [v0.6.0] - 2026-02-08
 ### Added
 - **Knowledge Base**: Integrated a Modal-based Wiki in the header for real-time theory reference.
 - **SIP.py Validation**: Real-time comparison of current Hierarchical SI against a ground-truth optimization engine.
@@ -35,3 +48,12 @@ All notable changes to the SI-Lab visualizer will be documented in this file.
 ## [v0.1.0] - 2026-02-01
 ### Added
 - **Base Algorithm**: Initial standalone Python implementation of Structural Information entropy calculations.
+
+---
+
+## [Upcoming / TODO]
+- **Algorithm Integration**: Plug-in architecture for custom community detection algorithms (GN, Label Propagation, Infomap).
+- **Batch Testing Suite**: Benchmarking tools to run optimization algorithms across multiple presets simultaneously.
+- **Graph Import/Export**: Support for `.gml`, `.graphml`, and custom JSON exports of the 2D/3D state.
+- **Real-time Collaboration**: WebSocket-based "Shared Room" for collaborative graph decomposition.
+- **Advanced Layouts**: Integration of Force-Directed 3D layouts for the entire encoding tree.
